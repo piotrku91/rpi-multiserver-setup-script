@@ -1,11 +1,51 @@
 #!/bin/bash
- echo "This is multiserver rpi setup script by PiotrQ"
- echo "Tested on RPI 2 / Linux kernel 6.1.21-v7+ / Raspbian GNU/Linux 11"
 
+USERNAME=${1}
 ########################################################################### FUNCTIONS ####################################################################
 ##########################################################################################################################################################
+function handle_error()
+{
+    # Colors table
+    RED='\033[1;31m'
+    DARKBLUE='\033[0;94m'
+    NOCOLOR='\033[0m'
 
-function update_upgrade_install_tools() {
+    FUNC_ARG=$1
+    echo -e "${RED}Error: ${DARKBLUE}$FUNC_ARG.${RED} Script stopped.${NOCOLOR}"
+    exit 1
+}
+
+function verify_root_permissions () {
+    USER_ID=$(id -u)
+    if [[ USER_ID -ne 0 ]]; then
+        handle_error "Script should be executed with root permissions"
+fi
+}
+
+function get_username () {
+if [[ $USERNAME == "" ]]; then
+    read -p 'Username: ' USERNAME
+fi
+
+echo "Choosen username: $USERNAME"
+
+USEREXISTS=$(grep $USERNAME /etc/passwd | wc -l)
+if [ "$USEREXISTS" -eq 0 ]; then
+    read -p 'User not exists. Do you want to create this user? ' OK
+
+        if [ $OK == "y" ]; then
+            echo "Hello ${USERNAME}. Now, We create new account..."
+            useradd -m -r ${USERNAME}
+            passwd ${USERNAME}
+            usermod -aG sudo ${USERNAME}
+        else
+            handle_error "Unknown user..."
+        fi
+fi
+echo "Ok user $USERNAME exists..."
+}
+
+function update_upgrade_install_tools () {
     echo "Update & upgrade..."
     apt update
     apt full-upgrade
@@ -13,39 +53,38 @@ function update_upgrade_install_tools() {
     TOOLS="vim git ufw bindfs"
 
     echo "Install editors and tools..."
-    apt-get install -y ${TOOLS}
+    apt-get install -y ${TOOLS} | handle_error "Some packages are not installed correctly..."
 }
 
-##### ENABLE FIREWALL
 function enable_firewall_setup () {
     read -p 'Do you want enable firewall? ' RUN_PROMPT
     if [ $RUN_PROMPT == "y" ]; then
         echo "Enabling firewall..."
 
         # Firewall preconfig
-        ufw allow 22/tcp
+        ufw allow 22/tcp | handle_error "Some error. Check if ufw is installed..."
         ufw enable 
     fi
 }
 
-##### FTP SERVER SECTION
 function ftp_server_setup () {
     read -p 'Do you want install FTP server and configure it? ' RUN_PROMPT
     if [ $RUN_PROMPT == "y" ]; then
         echo "Setup ftp server..."
 
-        apt-get install -y vsftpd 
-        chown root:root /home/${NEWUSERNAME}
-        mkdir -p /home/${NEWUSERNAME}/FTP/files
-        chmod a-w /home/${NEWUSERNAME}/FTP
-        chown ${NEWUSERNAME}:${NEWUSERNAME} /home/${NEWUSERNAME}/FTP/files
+        apt-get install -y vsftpd | handle_error "vsftpd are not installed correctly..."
+        chown root:root /home/${USERNAME}
+        mkdir -p /home/${USERNAME}/FTP/files
+        chmod a-w /home/${USERNAME}/FTP
+        chown ${USERNAME}:${USERNAME} /home/${USERNAME}/FTP/files
 
         # Reconfiguration
-        cp configs/ftp/certs/vsftpd.crt /etc/ssl/certs/vsftpd.crt
-        cp configs/ftp/certs/private/vsftpd.key /etc/ssl/private/vsftpd.key
+        cp configs/ftp/certs/vsftpd.crt /etc/ssl/certs/vsftpd.crt | handle_error "Missing prepared cert files... Generate keys first and copy to configs/ftp/certs/ directory"
+        cp configs/ftp/certs/private/vsftpd.key /etc/ssl/private/vsftpd.key | handle_error "Missing prepared cert files... Generate keys first and copy to configs/ftp/certs/ directory"
+
         cp /etc/vsftpd.conf /etc/vsftpd.conf.back # Create backup
         cp configs/ftp/vsftpd.conf /etc/vsftpd.conf # Replace by pre-configured file
-        echo "${NEWUSERNAME}" | sudo tee -a /etc/vsftpd.userlist
+        echo "${USERNAME}" | sudo tee -a /etc/vsftpd.userlist
 
         ufw allow 20:21/tcp # Open port in firewall
         ufw allow 990/tcp
@@ -54,7 +93,6 @@ function ftp_server_setup () {
     fi
 }
 
-##### USB FOLDER BINDING
 function usb_folder_binding_setup () {
     read -p 'Do you want bind usb device to FTP folder ?' RUN_PROMPT
     if [ $RUN_PROMPT == "y" ]; then
@@ -74,7 +112,7 @@ function usb_folder_binding_setup () {
         mkdir -p ${DEV_MOUNTPOINT}
 
         LINE_TO_ADD1="UUID=${DEV_UUID} ${DEV_MOUNTPOINT} ${DEV_FILESYSTEM} defaults,auto,users,rw,nofail,umask=000 0 0"
-        LINE_TO_ADD2="${DEV_MOUNTPOINT} /home/${NEWUSERNAME}/FTP/files fuse.bindfs force-user=${NEWUSERNAME},force-group=${NEWUSERNAME},perms=${DEV_CHMOD} 0 0"
+        LINE_TO_ADD2="${DEV_MOUNTPOINT} /home/${USERNAME}/FTP/files fuse.bindfs force-user=${USERNAME},force-group=${USERNAME},perms=${DEV_CHMOD} 0 0"
 
         cp /etc/fstab /etc/fstab.back # Create backup
 
@@ -94,21 +132,18 @@ function usb_folder_binding_setup () {
     fi
 }
 
-##### APACHE / INSTALL AND BIND
 function apache_install_and_bind_setup () {
     read -p 'Do you want to install apache and bind folders ?' RUN_PROMPT
     if [ $RUN_PROMPT == "y" ]; then
         echo "Apache installation..."
 
-        apt-get install apache2 -y
+        apt-get install apache2 -y | handle_error "apache2 are not installed correctly..."
         rm -rf /var/www/html/*
 
-        usermod -a -G www-data ${NEWUSERNAME}
+        usermod -a -G www-data ${USERNAME}
 
         chown -R www-data:www-data /var/www
-        chmod go-rwx /var/www
         chmod go+x /var/www
-        chgrp -R www-data /var/www
         chmod -R go-rwx /var/www
         chmod -R g+rx /var/www
         chmod -R g+rwx /var/www
@@ -146,7 +181,7 @@ function php_setup () {
     read -p 'Do you want to install php ?' RUN_PROMPT
     if [ $RUN_PROMPT == "y" ]; then
         echo "PHP installation..."
-        apt-get install php7.4 libapache2-mod-php7.4 php7.4-mbstring php7.4-mysql php7.4-curl php7.4-gd php7.4-zip -y
+        apt-get install php7.4 libapache2-mod-php7.4 php7.4-mbstring php7.4-mysql php7.4-curl php7.4-gd php7.4-zip -y | handle_error "Some packages are not installed correctly..."
 
         echo "<?php echo \"Today's date is \".date('Y-m-d H:i:s');?>" >> /var/www/html/php_test.php
     fi
@@ -154,10 +189,11 @@ function php_setup () {
 
 function show_menu ()
 {
-    clear
+    #clear
     echo "****************************************************************************************"
     echo "*                     RPI MULTISERVER SETUP SCRIPT BY PIOTRQ                           *"
     echo "****************************************************************************************"
+    echo "Current user: ${USERNAME}"
     echo "****************************************************************************************"
     echo "0 - Update / Upgrade / Install tools"
     echo "1 - Enable firewall"
@@ -165,10 +201,6 @@ function show_menu ()
     echo "3 - Install USB device and bind to FTP user folder"
     echo "4 - Install Apache and bind to FTP user folder (use once)"
     echo "5 - Install PHP"
-    echo "5 - Install MySQL (mariadb)" #TODO
-    echo "6 - Install Dynamic dns" #TODO
-    echo "7 - Install VPN server" #TODO
-    echo "8 - Install Grafana with InfluxDB" #TODO
     echo "exit - Exit script"
     echo ""
 
@@ -177,16 +209,11 @@ function show_menu ()
 ########################################################################### MAIN RUNTIME #################################################################
 ##########################################################################################################################################################
 
-##### USER CREATION SECTION
-read -p 'Username: ' NEWUSERNAME
-USEREXISTS=$(grep $NEWUSERNAME /etc/passwd | wc -l)
-if [ "$USEREXISTS" -eq 0 ]; then
-    echo "Hello $NEWUSERNAME. Now, We create new account..."
-    useradd -m -r ${NEWUSERNAME}
-    passwd ${NEWUSERNAME}
-    usermod -aG sudo ${NEWUSERNAME}
-fi
-echo "Ok user $NEWUSERNAME exists..."
+echo "This is multiserver rpi setup script by PiotrQ"
+echo "Tested on RPI 2 / Linux kernel 6.1.21-v7+ / Raspbian GNU/Linux 11"
+
+verify_root_permissions
+get_username
 
 while [[ True ]]; do
     show_menu
@@ -209,9 +236,6 @@ while [[ True ]]; do
             apache_install_and_bind_setup
             ;;
         5)
-            php_setup
-            ;;
-        6)
             php_setup
             ;;
         exit)
